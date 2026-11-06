@@ -67,7 +67,7 @@ function Assert-VikaRelease([string]$Root) {
             if ($name -ne 'windows-release.json' -and -not $seen.Contains($name)) { throw 'Unlisted release file.' }
         }
     }
-    foreach ($required in @('node/node.exe', 'package.json', 'package-lock.json', 'packages/cli/bin/vika.mjs', 'packages/daemon/scripts/check-pi.mjs', 'packages/daemon/scripts/check-durable.mjs', 'scripts/windows-release-launch.mjs', 'scripts/windows-launch.mjs', 'scripts/pm2-windows.cjs', 'node_modules/@larksuite/cli/bin/lark-cli.exe', 'node_modules/@larksuite/cli/package.json', 'packages/daemon/package.json', 'node_modules/@earendil-works/pi-coding-agent/package.json', 'node_modules/@earendil-works/pi-durable/package.json')) {
+    foreach ($required in @('node/node.exe', 'package.json', 'package-lock.json','permission.json', 'packages/cli/bin/vika.mjs', 'packages/daemon/scripts/check-pi.mjs', 'packages/daemon/scripts/check-durable.mjs', 'scripts/windows-release-launch.mjs', 'scripts/windows-launch.mjs', 'scripts/pm2-windows.cjs', 'node_modules/@larksuite/cli/bin/lark-cli.exe', 'node_modules/@larksuite/cli/package.json', 'packages/daemon/package.json', 'node_modules/@earendil-works/pi-coding-agent/package.json', 'node_modules/@earendil-works/pi-durable/package.json')) {
         if (-not $seen.Contains($required)) { throw "Missing required release component: $required" }
     }
     return $manifest

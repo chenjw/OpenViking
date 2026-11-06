@@ -11,6 +11,8 @@ $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT' -or $env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Build on native Windows x64.' }
 if ($Version -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$') { throw 'Invalid release version.' }
 . (Join-Path $PSScriptRoot 'windows-release-common.ps1')
+$NodeArchive = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($NodeArchive)
+$OutputDirectory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
 $source = Split-Path $PSScriptRoot -Parent
 $repo = (& git -C $source rev-parse --show-toplevel).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Not a Git checkout.' }
@@ -23,7 +25,7 @@ try {
     $sourceZip = Join-Path $temp 'source.zip'
     $commit = (& git -C $source rev-parse --verify "$Ref^{commit}").Trim()
     if ($LASTEXITCODE -ne 0 -or $commit -notmatch '^[a-f0-9]{40}$') { throw 'Invalid committed source ref.' }
-    & git -C $repo archive --format=zip "--output=$sourceZip" "${commit}:vika" package.json package-lock.json deployment-config.cjs ecosystem.config.cjs packages/cli packages/daemon packages/web packages/updater LICENSE THIRD_PARTY_NOTICES.md scripts/pm2-windows.cjs scripts/windows-launch.mjs scripts/windows-release-launch.mjs
+    & git -C $repo archive --format=zip "--output=$sourceZip" "${commit}:vika" package.json package-lock.json permission.json deployment-config.cjs ecosystem.config.cjs packages/cli packages/daemon packages/web packages/updater LICENSE THIRD_PARTY_NOTICES.md scripts/pm2-windows.cjs scripts/windows-launch.mjs scripts/windows-release-launch.mjs
     if ($LASTEXITCODE -ne 0) { throw 'Source archive failed; commit the release scripts before building.' }
     $stage = Join-Path $temp 'stage'
     Expand-VikaArchive $sourceZip $stage
