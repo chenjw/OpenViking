@@ -36,7 +36,7 @@ try {
     if ($nodeRoots.Count -ne 1) { throw 'Expected the official Node Windows ZIP layout.' }
     Move-Item -LiteralPath $nodeRoots[0].FullName -Destination (Join-Path $stage 'node')
     $node = Join-Path $stage 'node\node.exe'
-    $wantedNode = (Get-Content -LiteralPath (Join-Path $stage 'package.json') -Raw | ConvertFrom-Json).vika.node
+    $wantedNode = (Get-Content -LiteralPath (Join-Path $stage 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).vika.node
     $actualNode = (& $node --version).Trim()
     if ($LASTEXITCODE -ne 0 -or $actualNode -ne "v$wantedNode") { throw 'Node version differs from the source pin.' }
     $architecture = (& $node -p 'process.platform.concat(String.fromCharCode(45),process.arch)').Trim()

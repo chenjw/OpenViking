@@ -31,6 +31,7 @@ try {
     $stage = Join-Path $root 'fixture'
     [IO.Directory]::CreateDirectory($stage) | Out-Null
     $required = @('node/node.exe','package.json','package-lock.json','permission.json','packages/cli/bin/vika.mjs','packages/daemon/scripts/check-pi.mjs','packages/daemon/scripts/check-durable.mjs','scripts/windows-release-launch.mjs','scripts/windows-launch.mjs','scripts/pm2-windows.cjs','node_modules/@larksuite/cli/bin/lark-cli.exe','node_modules/@larksuite/cli/package.json','packages/daemon/package.json','node_modules/@earendil-works/pi-coding-agent/package.json','node_modules/@earendil-works/pi-durable/package.json')
+    $required += ([string][char]0x6587 + [char]0x6863 + "/readme.txt")
     $files = @()
     foreach ($name in $required) {
         $file = Join-Path $stage $name
@@ -40,7 +41,7 @@ try {
     }
     $manifest = @{ schema=1; platform='win32-x64'; version='test-1'; node='24.21.0'; files=$files }
     $manifestFile = Join-Path $stage 'windows-release.json'
-    [IO.File]::WriteAllText($manifestFile, ($manifest | ConvertTo-Json -Depth 6))
+    [IO.File]::WriteAllText($manifestFile, ($manifest | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
     $null = Assert-VikaRelease $stage
     [IO.File]::WriteAllText((Join-Path $stage 'extra.txt'), 'unlisted')
     Reject { Assert-VikaRelease $stage }

@@ -50,7 +50,7 @@ function Expand-VikaArchive([string]$Archive, [string]$Destination) {
 }
 
 function Assert-VikaRelease([string]$Root) {
-    $manifest = Get-Content -LiteralPath (Join-Path $Root 'windows-release.json') -Raw | ConvertFrom-Json
+    $manifest = Get-Content -LiteralPath (Join-Path $Root 'windows-release.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($manifest.schema -ne 1 -or $manifest.platform -ne 'win32-x64' -or $manifest.version -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$') { throw 'Unsupported Windows release manifest.' }
     $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     foreach ($item in $manifest.files) {
@@ -75,7 +75,7 @@ function Assert-VikaRelease([string]$Root) {
 
 function Assert-VikaReleaseBinaries([string]$Root, [string]$NodeVersion) {
     $node = Join-Path $Root 'node\node.exe'
-    $sourcePin = (Get-Content -LiteralPath (Join-Path $Root 'package.json') -Raw | ConvertFrom-Json).vika.node
+    $sourcePin = (Get-Content -LiteralPath (Join-Path $Root 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).vika.node
     if ($NodeVersion -ne $sourcePin) { throw 'Manifest Node version differs from source pin.' }
     $actual = (& $node --version).Trim()
     if ($LASTEXITCODE -ne 0 -or $actual -ne "v$NodeVersion") { throw 'Bundled Node version mismatch.' }
@@ -86,8 +86,8 @@ function Assert-VikaReleaseBinaries([string]$Root, [string]$NodeVersion) {
         if ($LASTEXITCODE -ne 0) { throw "Bundled runtime validation failed: $script" }
     }
     $packageDir = Join-Path $Root 'node_modules\@larksuite\cli'
-    $wanted = (Get-Content -LiteralPath (Join-Path $packageDir 'package.json') -Raw | ConvertFrom-Json).version
-    $pinned = (Get-Content -LiteralPath (Join-Path $Root 'packages\daemon\package.json') -Raw | ConvertFrom-Json).dependencies.'@larksuite/cli'
+    $wanted = (Get-Content -LiteralPath (Join-Path $packageDir 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
+    $pinned = (Get-Content -LiteralPath (Join-Path $Root 'packages\daemon\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).dependencies.'@larksuite/cli'
     if ($wanted -ne $pinned) { throw 'Bundled Lark package differs from the daemon pin.' }
     $larkVersion = & (Join-Path $packageDir 'bin\lark-cli.exe') --version
     if ($LASTEXITCODE -ne 0) { throw 'Bundled Lark CLI could not execute.' }
