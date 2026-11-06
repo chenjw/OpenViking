@@ -1,5 +1,6 @@
 # Shared by the opt-in Windows release builder, installer and fixture tests.
 Set-StrictMode -Version Latest
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 function Assert-VikaArchiveHash([string]$Archive, [string]$Sha256) {
