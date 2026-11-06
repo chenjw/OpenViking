@@ -33,3 +33,14 @@ jobs:
         shell: powershell
         timeout-minutes: 15
         run: .\scripts\test-install-windows.ps1
+      - name: Release archive fixtures only (no build or release installation)
+        shell: powershell
+        run: |
+          foreach ($file in @('build-windows-release.ps1', 'install-windows-release.ps1', 'windows-release-common.ps1', 'test-windows-release.ps1')) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD "scripts/$file"), [ref]$null, [ref]$errors) | Out-Null
+            if ($errors.Count) { throw ($errors | Out-String) }
+          }
+          .\scripts\test-windows-release.ps1
+      - name: Release bootstrap configuration test
+        run: node --test packages/cli/test/windows-release-launch.test.mjs
