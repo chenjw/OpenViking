@@ -910,6 +910,7 @@ export class CodexAgent {
         'app-server', '--listen', 'stdio://',
         '-c', `developer_instructions=${tomlString(this.developerInstructionsText)}`,
         ...this.appServerConfigArgs,
+        ...(this.config.openVikingDisabled ? ['-c', 'mcp_servers.openviking.enabled=false'] : []),
       ];
       // The daemon's agent tools ride along as an MCP stdio adapter to the Core.
       const tools = agentToolServer(this.config, this.authorityToken);

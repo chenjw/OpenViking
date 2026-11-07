@@ -170,6 +170,7 @@ export class ActionService {
   }
 
   offered(tool) {
+    if (this.config.openVikingDisabled && (tool.openviking || tool.name === 'read_openviking_session_context')) return false;
     if (tool.action) return this.supporting(tool.action, 'actions').length > 0;
     if (tool.query) return this.supporting(tool.query, 'queries').length > 0;
     if (tool.connector) return this.connectors.manifests().some(([, manifest]) => manifest.name === tool.connector);

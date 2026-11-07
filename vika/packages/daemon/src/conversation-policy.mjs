@@ -157,7 +157,9 @@ export function assembleConversationPolicy(config = {}) {
     renderPrompt(config, 'events.md'),
     ...connectorSections(config),
     bundledCliSection(config),
-    renderPrompt(config, 'openviking.md'),
+    config.openVikingDisabled
+      ? 'OpenViking is disabled in this experimental build. No OV history or memory is injected. Use only the current native session and explicitly configured tools; do not claim cross-session memory.'
+      : renderPrompt(config, 'openviking.md'),
     config.meetingNotes ? renderPrompt(config, 'meeting-notes.md') : '',
     roleSection(config),
     naturalWritingSection(config),

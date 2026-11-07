@@ -1,3 +1,5 @@
+> 此分支为无 OV 的源码实验，安装和限制请先阅读 [NO_OV_EXPERIMENT.md](NO_OV_EXPERIMENT.md)。以下正文保留上游说明。
+
 # Vika
 
 把你本机上的 coding agent 接进飞书、微信、Telegram、Slack 和 QQ，也可以接收邮箱事件。Core 维护一个共享的 Agent session 和 OpenViking 空间；每个消息源由独立 Connector 子进程接入。
