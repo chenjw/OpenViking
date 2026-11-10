@@ -39,6 +39,10 @@ const RESPONSE_TO = {
   description: 'Optional event= of the earlier input this delivery fulfills. Defaults to decision_id. Attribution only; it must be from the same chat/thread or subject and no newer than decision_id.',
 };
 const DECISION_FIELDS = { decision_id: DECISION, decision_instance: DECISION_INSTANCE, response_to_id: RESPONSE_TO };
+const ALLOW_STALE_DECISION = {
+  type: 'boolean', default: false,
+  description: 'Only for an explicitly authorized delayed follow-up to this accepted decision. true skips event-time freshness, not runtime authority, accepted-input validation or target/thread rules. Keep the original decision_id, decision_instance and authorized destination; never use it to invent a decision or redirect a reply.',
+};
 const INTERIM = {
   interim: {
     type: 'boolean', default: false,
@@ -87,7 +91,7 @@ export const TOOLS = [
       source: SOURCE,
       chat_id: { type: 'string', pattern: ID, description: 'Full chat id (the chat= value). Never guess or shorten.' },
       ...CONTENT_PROPERTIES, ...MENTIONS,
-      ...DECISION_FIELDS, idempotency_key: IDEMPOTENCY,
+      ...DECISION_FIELDS, allow_stale_decision: ALLOW_STALE_DECISION, idempotency_key: IDEMPOTENCY,
     }, ['chat_id', 'decision_id']),
     stagedInput: INTERIM,
     annotations: WRITE,
@@ -117,7 +121,7 @@ export const TOOLS = [
       message_id: { type: 'string', pattern: ID, description: 'Full message id (msg= or card=) to reply to. Never guess or shorten.' },
       ...CONTENT_PROPERTIES, ...MENTIONS,
       reply_in_thread: { type: 'boolean', default: false, description: 'Lark and Slack: reply inside the message thread. Set it on every reply to a message that has thread=.' },
-      ...DECISION_FIELDS, idempotency_key: IDEMPOTENCY,
+      ...DECISION_FIELDS, allow_stale_decision: ALLOW_STALE_DECISION, idempotency_key: IDEMPOTENCY,
     }, ['message_id', 'decision_id']),
     stagedInput: INTERIM,
     annotations: WRITE,

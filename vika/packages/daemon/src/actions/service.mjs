@@ -388,9 +388,16 @@ export class ActionService {
   // Freshness fence: the decision must resolve to exactly one accepted inbound
   // event with nothing newer accepted in its scope (the chat/thread, or the
   // subject of a non-chat event).
-  fence(input, caller) {
+  staleDecisionAllowed(input) {
+    if (input.allow_stale_decision !== undefined && typeof input.allow_stale_decision !== 'boolean') {
+      throw blocked('invalid_input', 'allow_stale_decision must be a boolean. ' + NO_ACTION);
+    }
+    return input.allow_stale_decision === true;
+  }
+
+  fence(input, caller, { allowStaleDecision = false } = {}) {
     const row = this.resolveDecision(input, caller);
-    if (!this.isTimerReminder(row)) this.assertFresh(row, caller);
+    if (!allowStaleDecision && !this.isTimerReminder(row)) this.assertFresh(row, caller);
     return row;
   }
 
@@ -655,7 +662,7 @@ export class ActionService {
   }
 
   async deliver({
-    caller, connector, action, input, key, summary, scope, fence = null, inboundSeq = null, metadata = {}, final = true,
+    caller, connector, action, input, key, summary, scope, fence = null, inboundSeq = null, metadata = {}, final = true, allowStaleDecision = false,
   }) {
     // Preparing the content may have awaited (a mention lookup), and a newer
     // message or a runtime switch could have landed meanwhile. Re-check right
@@ -663,7 +670,7 @@ export class ActionService {
     if (caller.authority) {
       this.assertAuthority(caller.authority);
       if (fence) {
-        if (!this.isTimerReminder(fence)) this.assertFresh(fence, caller);
+        if (!allowStaleDecision && !this.isTimerReminder(fence)) this.assertFresh(fence, caller);
         this.assertNoBotLoop(fence, action, scope, caller);
       }
     }
@@ -688,7 +695,7 @@ export class ActionService {
     if (!reservation.claimed) {
       if (reservation.status === 'SENT') {
         this.settleDecision(caller, fence, final);
-        return { ...reservation.result, duplicate: true };
+        return { ...reservation.result, ...(allowStaleDecision ? { outbox_id: reservation.id } : {}), duplicate: true };
       }
       throw reservation.status === 'PENDING'
         ? blocked('in_progress', `Delivery blocked: this identical action is still in progress. ${NO_ACTION}`)
@@ -749,12 +756,13 @@ export class ActionService {
   }
 
   async sendMessage(input, caller) {
+    const allowStaleDecision = this.staleDecisionAllowed(input);
     const connector = this.route(caller, 'message.send', 'actions', input.source, { chatId: input.chat_id });
     const spec = this.actionSpec(connector, 'message.send', input.chat_id);
     if (!spec) {
       throw blocked('unsupported', `chat_id=${input.chat_id} takes no new message: answer one of its messages with reply_message. ${NO_ACTION}`);
     }
-    const fence = this.fence(input, caller);
+    const fence = this.fence(input, caller, { allowStaleDecision });
     this.authorize(fence);
     this.authorizeTimerDelivery(fence, { connector, action: 'message.send', chatId: input.chat_id });
     // A plain send lands in the chat's main conversation.
@@ -771,6 +779,7 @@ export class ActionService {
         summary: content.summary,
         scope: { chatId: input.chat_id, convKey: responseTo.conv_key },
         fence,
+        allowStaleDecision,
         inboundSeq: responseTo.seq,
         metadata: interim ? { interim: true } : {},
         final: !interim,
@@ -809,6 +818,7 @@ export class ActionService {
   }
 
   async replyMessage(input, caller) {
+    const allowStaleDecision = this.staleDecisionAllowed(input);
     const connector = this.route(caller, 'message.reply', 'actions', input.source, { messageId: input.message_id });
     const target = this.messageScope(connector, input.message_id);
     const spec = this.actionSpec(connector, 'message.reply', target?.chat_id);
@@ -820,13 +830,13 @@ export class ActionService {
     if (inThread && !spec.thread) {
       throw blocked('unsupported', `${connector} does not support thread replies. ${NO_ACTION}`);
     }
-    const fence = this.fence(input, caller);
+    const fence = this.fence(input, caller, { allowStaleDecision });
     // The reply lands where its target is. A target outside any chat (a mail)
     // has no chat: it never borrows the decision's.
     const chatId = target ? target.chat_id : fence.chat_id;
     const interim = this.interim(input, caller, fence, connector, target?.conv_key ?? null, spec);
     this.authorizeTimerDelivery(fence, { connector, action: 'message.reply', chatId });
-    if (spec.approval) return this.proposeReply(input, caller, connector, fence);
+    if (spec.approval) return this.proposeReply(input, caller, connector, fence, { allowStaleDecision });
     this.authorize(fence);
     const responseTo = this.attribution(caller, input.response_to_id, fence, { connector, messageId: input.message_id });
     const content = await this.content(input, connector, 'message.reply', { chatId, fence, caller });
@@ -839,6 +849,7 @@ export class ActionService {
         summary: content.summary,
         scope: { chatId, threadId: target?.thread_id ?? null, convKey: target ? target.conv_key : responseTo.conv_key },
         fence,
+        allowStaleDecision,
         inboundSeq: responseTo.seq,
         // Non-chat history is rendered from the event it answers.
         metadata: target && !target.chat_id && target.event_json ? { event: JSON.parse(target.event_json) }
@@ -859,7 +870,7 @@ export class ActionService {
   // A reply the owner must approve (a mail): the draft goes to the owner on a
   // card, never to the target. Any decision may propose one, the mail itself
   // included; the owner's press on that card is what sends it.
-  async proposeReply(input, caller, connector, fence) {
+  async proposeReply(input, caller, connector, fence, { allowStaleDecision = false } = {}) {
     const target = this.store.eventByMessageId(input.message_id, connector);
     if (!target || target.chat_id) {
       throw blocked('invalid_target', `message_id must be a mail this daemon received (its msg= value). ${NO_ACTION}`);
@@ -895,7 +906,7 @@ export class ActionService {
     const key = this.key(input.idempotency_key, 'approval', connector, eventRef(fence), input.message_id, draftText);
     const delivery = { caller, connector: im, action: 'message.send', key,
       summary: `[mail reply draft for the owner to approve] ${draftText}`,
-      scope: {}, fence, inboundSeq: responseTo.seq, metadata: { notify: 'owner', decisionEvent: fence.event_id, approval: true } };
+      scope: {}, fence, allowStaleDecision, inboundSeq: responseTo.seq, metadata: { notify: 'owner', decisionEvent: fence.event_id, approval: true } };
     if (!byCard) return this.proposeByMessage({ delivery, draft, im, owner });
     const question = approvalQuestion(draft, owner.id);
     const result = await this.deliver({

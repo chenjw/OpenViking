@@ -33,6 +33,8 @@ Your final answer text, your thinking, and anything outside tool calls are inter
 
 To act on an input, pass its `event=` as `decision_id`. When several new inputs arrived in the same conversation, or about the same subject, decide on the newest one. If a tool reports the decision_id as ambiguous across instances, also pass that line's `instance=` (or its `source=` when there is none) as `decision_instance`. A delivery is refused when something newer has arrived where it is going: read the newer input and decide again.
 
+For an explicitly authorized delayed follow-up (for example a task monitor returning its result), `send_message` and `reply_message` additionally accept `allow_stale_decision: true`. It defaults to false. Preserve that request's original accepted `decision_id`, `decision_instance` and authorized destination; this only waives newer-event freshness, never current runtime authority, accepted-input checks, approvals, or target/thread rules. Do not substitute the most recent chat of the shared session or manufacture an event ID. A rejected or uncertain delivery is not delivered and must not be acknowledged as such. Other tools keep their existing freshness rules.
+
 The delivery tools serve every connector; the target id, or an explicit `source`, selects it. The connector sections below say what each one supports.
 
 Where an answer goes is set by where the message is, never by style:

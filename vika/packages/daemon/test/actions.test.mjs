@@ -1621,3 +1621,72 @@ describe('staged replies', () => {
     assert.equal(service.reactionRemovals.size, 0);
   });
 });
+
+describe('explicit delayed delivery freshness override', () => {
+  for (const tool of ['send_message', 'reply_message']) {
+    it(`${tool}: only strict true permits an accepted stale decision`, async (t) => {
+      const { call, service, store, connectors, inbound } = setup(t);
+      inbound({ messageId: 'om_origin', chatId: 'oc_origin' });
+      inbound({ messageId: 'om_newer', chatId: 'oc_origin' });
+      const input = { ...(tool === 'send_message' ? { chat_id: 'oc_origin' } : { message_id: 'om_origin' }),
+        decision_id: 'message:om_origin', decision_instance: 'lark', source: 'lark', markdown: 'Requested delayed result' };
+      for (const flag of [undefined, false]) {
+        await assert.rejects(call(tool, { ...input, ...(flag === undefined ? {} : { allow_stale_decision: flag }) }),
+          error => error.code === 'stale_decision');
+      }
+      for (const value of ['true', 'false', 1, null, {}, []]) {
+        await assert.rejects(call(tool, { ...input, allow_stale_decision: value }), error => error.code === 'invalid_input');
+        await assert.rejects(service[tool === 'send_message' ? 'sendMessage' : 'replyMessage'](
+          { ...input, allow_stale_decision: value }, { authority: TOKEN, trace: {} }), error => error.code === 'invalid_input');
+      }
+      await assert.rejects(call(tool, { ...input, decision_id: 'fabricated', allow_stale_decision: true }), error => error.code === 'unknown_decision');
+      await assert.rejects(call(tool, { ...input, decision_instance: 'other', allow_stale_decision: true }), error => error.code === 'unknown_decision');
+      await assert.rejects(call(tool, { ...input, allow_stale_decision: true }, 'retired'), error => error.code === 'authority_revoked');
+      store.ingest(chatEvent({ messageId: 'om_ignored', chatId: 'oc_origin' }), 'ignored_sender');
+      await assert.rejects(call(tool, { ...input, decision_id: 'message:om_ignored', allow_stale_decision: true }), error => error.code === 'unknown_decision');
+      assert.equal(connectors.calls.length, 0);
+      const delivered = await call(tool, { ...input, allow_stale_decision: true });
+      const replay = await call(tool, { ...input, allow_stale_decision: true });
+      assert.equal(replay.data.duplicate, true);
+      assert.equal(replay.data.outbox_id, delivered.data.outbox_id);
+      assert.equal(connectors.calls.length, 1);
+      assert.equal(connectors.calls[0].input[tool === 'send_message' ? 'chat_id' : 'message_id'], tool === 'send_message' ? 'oc_origin' : 'om_origin');
+    });
+  }
+  it('does not expose the override on other tools or bypass approval-required replies', async (t) => {
+    const { store, call, connectors } = setup(t, { ids: ['lark', 'email'], profile: 'delayed-test',
+      run: connector => connector === 'email' ? { sent: true } : { message_id: 'om_approval_card', chat_id: 'oc_owner12345678' } });
+    store.ingest(mailEvent({ uid: 7 }));
+    store.ingest(mailEvent({ uid: 8 }));
+    await assert.rejects(call('notify_owner', { decision_id: 'imap:1:7', markdown: 'late', allow_stale_decision: true }), error => error.code === 'invalid_input');
+    const result = await call('reply_message', { source: 'email', message_id: 'mail:1:7', decision_id: 'imap:1:7',
+      markdown: 'draft only', allow_stale_decision: true });
+    assert.match(result.text, /Nothing was sent yet/);
+    assert.deepEqual(connectors.calls.map(item => [item.connector, item.action]), [['lark', 'message.send']]);
+  });
+  it('keeps thread destination and response attribution fences with the override', async (t) => {
+    const { call, connectors, inbound } = setup(t);
+    inbound({ messageId: 'om_origin', chatId: 'oc_origin', threadId: 'omt_origin' });
+    inbound({ messageId: 'om_newer', chatId: 'oc_origin', threadId: 'omt_origin' });
+    inbound({ messageId: 'om_other', chatId: 'oc_other' });
+    const common = { decision_id: 'message:om_origin', allow_stale_decision: true, markdown: 'delayed' };
+    await assert.rejects(call('send_message', { ...common, chat_id: 'oc_origin' }), error => error.code === 'thread_target_mismatch');
+    await assert.rejects(call('reply_message', { ...common, message_id: 'om_origin', reply_in_thread: true,
+      response_to_id: 'message:om_other' }), error => error.code === 'attribution_rejected');
+    assert.equal(connectors.calls.length, 0);
+    await call('reply_message', { ...common, message_id: 'om_origin', reply_in_thread: true });
+    assert.equal(connectors.calls[0].input.reply_in_thread, true);
+  });
+  it('rechecks runtime authority after asynchronous preparation even when stale is allowed', async (t) => {
+    let finish;
+    const roster = { resolveNames: (_chat, names) => new Promise(resolve => { finish = () => resolve(names.map(name => ({name,id:'ou_alice12345678'}))); }) };
+    const { store, call, connectors, inbound } = setup(t, { roster });
+    inbound({messageId:'om_origin',chatId:'oc_origin'});
+    inbound({messageId:'om_newer',chatId:'oc_origin'});
+    const pending=call('send_message',{chat_id:'oc_origin',decision_id:'message:om_origin',allow_stale_decision:true,
+      markdown:'@Alice result',mention_names:['Alice']});
+    store.initializeCognition('claude','replacement');finish();
+    await assert.rejects(pending,error=>error.code==='authority_revoked');
+    assert.equal(connectors.calls.length,0);
+  });
+});
