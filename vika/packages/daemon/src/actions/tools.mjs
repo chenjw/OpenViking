@@ -149,11 +149,9 @@ export const TOOLS = [
     inputSchema: schema({
       source: SOURCE,
       message_id: { type: 'string', pattern: ID, description: 'Full id of the bot message to retract.' },
-    }, ['message_id']),
-    silenceInput: {
-      decision_id: { ...DECISION, description: 'event= (never msg=) of the input that asked for this retraction, copied exactly. Records the retraction as your decision on it, so no stay_silent or reply is needed for that input. Freshness fence: blocked if anything newer has arrived there.' },
+      decision_id: { ...DECISION, description: 'event= (never msg=) of the input that asked for this retraction, copied exactly. Required for group or unverified chat targets; optional only for a verified private chat. Records the retraction as your decision on it. Freshness fence: blocked if anything newer has arrived there.' },
       decision_instance: DECISION_INSTANCE,
-    },
+    }, ['message_id']),
     annotations: { ...WRITE, destructiveHint: true },
   },
   {

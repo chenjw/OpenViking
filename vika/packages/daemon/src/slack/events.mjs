@@ -162,6 +162,12 @@ export function normalizeMessage(payload, { account, instance = 'slack', agentNa
     },
     content: { text, attachments: attached.map((file) => ({ id: file.id, type: file.kind, name: file.name })) },
     reply_route: { action: 'message.reply', input: { message_id: id } },
+    data: {
+      // Strip provider user tokens before rendering; escaped literal text and
+      // names in prose are not mention boundaries. Used only to detect broadcast.
+      addressing_text: renderText(String(event.text ?? '').replace(/<@[UW][A-Z0-9]{2,30}(?:\|[^>]*)?>/g, ' '), nameOf).trim(),
+      ...(/<!(?:here|channel|everyone)(?:\|[^>]*)?>/.test(event.text ?? '') ? { broadcast_mention: true } : {}),
+    },
   });
   return { envelope, id, route: { channel: event.channel, ts: event.ts, threadTs, files: attached }, people };
 }

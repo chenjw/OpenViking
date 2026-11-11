@@ -83,7 +83,7 @@ describe('conversation policy assemble', () => {
 
   it('fills in the instance name and upgrade target', () => {
     const text = assembleConversationPolicy({ connectors: ['lark'], agentName: '贝塔', upgradeTarget: 'beta' });
-    assert.match(text, /directly calls `贝塔`/);
+    assert.match(text, /贝塔，你评价大家的方案/);
     assert.match(text, /`vika upgrade beta`/);
     assert.doesNotMatch(text, /\{\{[A-Z_]+\}\}/);
   });
@@ -94,11 +94,11 @@ describe('conversation policy assemble', () => {
     assert.match(text, /made only at the owner's request \(`owner=1`\) or in a chat the Role names/);
   });
 
-  it('routes @mentions by the authenticated mention= marker, by name only without it', () => {
+  it('uses the Core recipient classification, not a mixed mention or arbitrary name fallback', () => {
     const text = assembleConversationPolicy({ connectors: ['lark'], agentName: 'Vika' });
     assert.match(text, /`mention=` says, by id, whom the message's @mentions call/);
-    assert.match(text, /only then compare a visible @name with your name/);
-    assert.match(text, /`mention=me` or `mention=mixed`, a visible @mention matching your name when there is no `mention=`/);
+    assert.match(text, /this marker alone never grants permission to reply/);
+    assert.match(text, /`direct_others`, `broadcast`, `no_target`, and `unknown` mean stay silent/);
     assert.match(text, /`mention=` says whether one of them is you/);
   });
 

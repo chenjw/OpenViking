@@ -140,12 +140,13 @@ test('member query identifies an unseen person and a tool reply can mention them
   const store = new Store(':memory:', logger);
   store.initializeCognition('codex', 'runtime-token');
   t.after(() => store.close());
-  const inbound = normalizeMessage(payload({ user: 'U0OWNER', text: 'Greet the other person' }), { account });
+  const inbound = normalizeMessage(payload({ user: 'U0OWNER', text: '<@U0BOT> Greet the other person' }), { account });
   c.state.recordRoute(inbound.id, inbound.route);
   store.ingest(normalizeEvent(inbound.envelope));
   const actions = new ActionService({ store, logger,
     config: { channel: 'slack', maxReplyChars: 30_000, workspace: c.config.dataDir, tempDir: c.config.dataDir },
     connectors: { manifests: () => [['slack', getConnectorManifest('slack')]],
+      selfIdentity: id => id === 'slack' ? { id: account.botUserId } : null,
       invoke: (_id, name, input) => invokeOperation(c, name, input) },
   });
   const call = (name, input) => actions.call(name, input, { authority: 'runtime-token' });
@@ -268,9 +269,10 @@ test('history to thread, media and reply works in a mixed instance without repla
   const store = new Store(':memory:', logger);
   t.after(() => store.close());
   store.initializeCognition('codex', 'runtime-token');
-  const incoming = normalizeMessage(payload(), { account });
+  const incoming = normalizeMessage(payload({ text: '<@U0BOT> please help' }), { account });
   store.ingest(normalizeEvent(incoming.envelope));
   const connectors = { manifests: () => ['lark', 'slack'].map(id => [id, getConnectorManifest(id)]),
+    selfIdentity: id => id === 'slack' ? { id: account.botUserId } : null,
     invoke: (id, action, input) => { assert.equal(id, 'slack'); return invokeOperation(c, action, input); } };
   const actions = new ActionService({ config: { workspace: c.config.dataDir, tempDir: c.config.dataDir, maxReplyChars: 30_000 }, store, connectors, logger });
   const call = (tool, input) => actions.call(tool, input, { authority: 'runtime-token' });
@@ -578,6 +580,7 @@ test('the safety fuse holds replies to bots only after many with no person writi
   t.after(() => store.close());
   const connectors = {
     manifests: () => [['slack', getConnectorManifest('slack')]],
+    selfIdentity: () => ({ id: account.botUserId }),
     owner: () => ({ id: account.ownerId, target: { chat_id: account.ownerChannel } }),
     invoke: (_id, action, input) => invokeOperation(c, action, input),
   };
@@ -592,7 +595,7 @@ test('the safety fuse holds replies to bots only after many with no person writi
     store.ingest(normalizeEvent(normalized.envelope));
     return normalized;
   };
-  const alert = { user: 'U0ALERT', bot_id: 'B0ALERT', text: 'disk full' };
+  const alert = { user: 'U0ALERT', bot_id: 'B0ALERT', text: '<@U0BOT> disk full' };
   const answer = (message, service) => call('reply_message', { message_id: message.id, markdown: 'looking', reply_in_thread: false,
     decision_id: message.envelope.id }, service);
   const notices = () => posts.filter((post) => post.channel === account.ownerChannel);

@@ -334,6 +334,7 @@ export class PersonalAgentDaemon {
         },
         isOwner: (event) => this.connectors.isOwner(event),
         mentionTarget: (event) => this.connectors.mentionTarget(event),
+        prepareAddressing: (event, seq) => this.actions.prepareAddressing(event, seq),
         isStopping: () => this.shuttingDown,
       });
       // Checks at each successful turn's end that every input it consumed got a

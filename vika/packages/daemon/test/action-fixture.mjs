@@ -7,6 +7,8 @@ import { LarkClient } from '../src/lark.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 
+export const FIXTURE_SELF = 'ou_fixture_bot123456';
+
 export const larkSuccess = (data) => ({ code: 0, stdout: JSON.stringify({ ok: true, data }), stderr: '', timedOut: false });
 
 // A ConnectorManager stand-in: the real built-in manifests, and every invoke
@@ -18,6 +20,7 @@ export function fakeConnectors({ ids = ['lark'], run = null, owners = {} } = {})
     calls,
     updates,
     owners,
+    selfIdentity: id => ids.includes(id) ? { id: FIXTURE_SELF } : null,
     async updateCard(messageId, card) { updates.push({ messageId, card }); },
     // An instance id names its connector before any -suffix (email-gmail).
     manifests: () => ids.map((id) => [id, getConnectorManifest(id.split('-')[0])]),
@@ -42,6 +45,7 @@ export function larkConnectors({ profile = 'test-profile', tempDir, run }) {
   return {
     calls,
     manifests: () => [['lark', getConnectorManifest('lark')]],
+    selfIdentity: () => ({ id: FIXTURE_SELF }),
     invoke: (_connector, action, input) => invokeOperation(client, action, input),
   };
 }

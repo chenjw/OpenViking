@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import { lookupMemberName, sanitizeMemberName } from './roster.mjs';
+import { ADDRESSEE_KINDS } from './addressing.mjs';
 
 // Runtime-neutral authenticated envelope shared by every adapter. Untrusted
 // content stays on one physical line so it cannot forge metadata.
@@ -178,13 +179,15 @@ export function formatInboundLine(message, resolveName = null, authenticated = {
     : '';
   const bots = authenticated?.botsSinceHuman;
   const botsTag = Number.isSafeInteger(bots) && bots > 0 ? ` bots_since_human=${bots}` : '';
+  const recipientTag = ADDRESSEE_KINDS.includes(authenticated?.addressing?.kind)
+    ? ` addressee=${authenticated.addressing.kind}` : '';
   const mentionTag = MENTION_TARGETS.has(authenticated?.mention) ? ` mention=${authenticated.mention}` : '';
   const line = `[chat=${chatTag(metadataTag(message.chatId), message.threadId)}${message.external ? ' external=true' : ''} source=${message.source || 'lark'}`
     + (message.connectorInstance && message.connectorInstance !== message.source ? ` instance=${metadataTag(message.connectorInstance)}` : '')
     + ` msg=${metadataTag(message.messageId)} event=${metadataTag(message.eventId)}`
     + (message.messageType === 'card_action' ? ` card=${message.parentId}` : '')
     + ` time=${isoMinute(message.createTimeMs)} from=${fromLabel(message.chatId, message.senderId, resolveName, message.source, message.senderName)}${ownerTag}`
-    + `${BOT_SENDERS.has(message.senderType) ? ' sender=bot' : ''}${botsTag}${replyTag}${mentionTag}${idleTag}${undecidedTag}] ${renderInboundContent(message)}`;
+    + `${BOT_SENDERS.has(message.senderType) ? ' sender=bot' : ''}${botsTag}${replyTag}${mentionTag}${recipientTag}${idleTag}${undecidedTag}] ${renderInboundContent(message)}`;
   return line;
 }
 

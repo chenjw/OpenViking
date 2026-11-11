@@ -69,7 +69,7 @@ function parseJson(value) {
   }
 }
 
-function collectText(value, output, mediaKeys = new Set(), depth = 0) {
+function collectText(value, output, mediaKeys = new Set(), depth = 0, omitMentions = false) {
   if (depth > 8 || value === null || value === undefined) return;
   if (typeof value === 'string') {
     const trimmed = value.trim();
@@ -77,10 +77,11 @@ function collectText(value, output, mediaKeys = new Set(), depth = 0) {
     return;
   }
   if (Array.isArray(value)) {
-    for (const item of value) collectText(item, output, mediaKeys, depth + 1);
+    for (const item of value) collectText(item, output, mediaKeys, depth + 1, omitMentions);
     return;
   }
   if (typeof value !== 'object') return;
+  if (omitMentions && value.tag === 'at') return;
 
   // Rich-post image/media nodes carry resources inside otherwise generic
   // content. Preserve only the resource pointer that the matching MCP tool
@@ -105,17 +106,17 @@ function collectText(value, output, mediaKeys = new Set(), depth = 0) {
   const visited = new Set();
   for (const key of priorityKeys) {
     if (Object.hasOwn(value, key)) {
-      collectText(value[key], output, mediaKeys, depth + 1);
+      collectText(value[key], output, mediaKeys, depth + 1, omitMentions);
       visited.add(key);
     }
   }
   for (const [key, child] of Object.entries(value)) {
     if (visited.has(key) || ['tag', 'style', 'language'].includes(key) || /(?:_key|_id|url|token|secret)$/i.test(key)) continue;
-    collectText(child, output, mediaKeys, depth + 1);
+    collectText(child, output, mediaKeys, depth + 1, omitMentions);
   }
 }
 
-export function humanizeContent(messageType, rawContent) {
+export function humanizeContent(messageType, rawContent, { omitMentions = false } = {}) {
   if (messageType === 'interactive' && (rawContent == null
     || (typeof rawContent === 'string' && !rawContent.trim()))) return '[card]';
   if (typeof rawContent === 'string' && !rawContent.trim().startsWith('{') && !rawContent.trim().startsWith('[')) {
@@ -135,7 +136,7 @@ export function humanizeContent(messageType, rawContent) {
     return `[${messageType} file_key=${parsed.file_key}${name}]`;
   }
   const parts = [];
-  collectText(parsed, parts);
+  collectText(parsed, parts, new Set(), 0, omitMentions);
   const unique = [...new Set(parts)];
   if (unique.length > 0) return unique.join('\n').trim();
   // Lark emits call invitations and call lifecycle notices as video_chat IM
@@ -152,6 +153,19 @@ export function humanizeContent(messageType, rawContent) {
     return `[${messageType}]`;
   }
   return '';
+}
+
+// Broadcast is its own provider signal, never an expansion into chat members.
+function hasBroadcastMention(raw, mentions, content) {
+  if (mentions.some(m => m.id === 'all' || m.key === '@_all') || /(?:^|\s)@_all(?:[\s，,:：]|$)/.test(content)) return true;
+  let body = raw;
+  if (typeof body === 'string') { try { body = JSON.parse(body); } catch { return false; } }
+  function visit(value, depth = 0) {
+    if (!value || typeof value !== 'object' || depth > 12) return false;
+    if (value.tag === 'at' && value.user_id === 'all') return true;
+    return Object.values(value).some(child => visit(child, depth + 1));
+  }
+  return visit(body);
 }
 
 function normalizeMentions(value) {
@@ -221,6 +235,10 @@ export function normalizeLarkMessage(input, instance = 'lark') {
     message: { id: messageId, type: messageType, root_id: rootId, parent_id: parentId,
       thread_root_id: threadRootId, mentions },
     reply_route: { action: 'message.reply', input: { message_id: messageId } },
-    data: { supported: AGENT_VISIBLE_MESSAGE_TYPES.has(messageType) },
+    data: { supported: AGENT_VISIBLE_MESSAGE_TYPES.has(messageType),
+      // Remove actual rich-post at nodes, never their display-name substrings.
+      ...(messageType === 'post' ? { addressing_text: humanizeContent(messageType, rawContent, { omitMentions: true }) } : {}),
+      // Preserve the provider broadcast marker even when no member list is supplied.
+      ...(hasBroadcastMention(rawContent, mentions, content) ? { broadcast_mention: true } : {}) },
   }));
 }

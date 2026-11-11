@@ -486,6 +486,10 @@ export class ConnectorManager {
 
   // Whom an event's @mentions call, against the bot identity its Connector
   // reported at check (see mentionTarget).
+  selfIdentity(instance) {
+    return this.connectors.get(instance)?.self ?? null;
+  }
+
   mentionTarget(event) {
     const self = this.connectors.get(event?.connectorInstance ?? event?.source)?.self;
     return mentionTarget(event?.mentions, self?.id);

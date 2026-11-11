@@ -1470,6 +1470,33 @@ export class Store {
     );
   }
 
+  // Core-owned derived metadata lives beside the canonical envelope. normalizeEvent
+  // drops unknown top-level keys, so a Connector/body cannot mint this snapshot.
+  freezeAddressee(seq, addressing) {
+    const row = this.db.prepare("SELECT event_json FROM connector_events WHERE seq = ? AND status = 'DONE'").get(seq);
+    if (!row) return;
+    const event = JSON.parse(row.event_json);
+    if (event._core_addressee) return;
+    event._core_addressee = addressing;
+    this.db.prepare('UPDATE connector_events SET event_json = ? WHERE seq = ?').run(JSON.stringify(event), seq);
+  }
+
+  // Exact connector/chat/thread scope, not the most recent bot message.
+  scopedReplyAuthor(event, selfId) {
+    const parent = event.parentId;
+    if (!parent || parent === event.messageId || parent === event.threadRootId) return null;
+    const inbound = this.getInboundByMessage.get(event.connectorInstance, parent);
+    if (inbound) {
+      if (inbound.conv_key !== event.conversationKey || !inbound.sender_id) return { kind: 'unknown' };
+      return { kind: inbound.sender_id === selfId ? 'self' : 'other', id: inbound.sender_id };
+    }
+    // The outbox conv_key attributes the response to its request, which may
+    // originate in another chat. Reuse actual payload/receipt target evidence.
+    const sent = this.retractableMessage(parent, event.connectorInstance);
+    return sent?.thread_known && sent.chat_id === event.chatId && sent.thread_id === (event.threadId ?? null)
+      ? { kind: 'self', id: selfId } : { kind: 'unknown' };
+  }
+
   // Who authored a message id this daemon has seen: an inbound sender, or the
   // bot itself (journaled deliveries record actor 'me'). Null when unseen —
   // e.g. quoted messages older than local history.
@@ -1703,6 +1730,46 @@ export class Store {
       WHERE chat_id = ? AND connector_instance = ? ORDER BY seq DESC LIMIT 1`).get(chatId, connector)
       ?? { tenant_key: this.db.prepare(`SELECT tenant_key FROM connector_events
         WHERE +connector_instance = ? AND tenant_key IS NOT NULL ORDER BY seq DESC LIMIT 1`).get(connector)?.tenant_key ?? null };
+  }
+
+  // Retraction requires positive evidence that this bot sent the target, not
+  // just a reaction receipt or an attempted/uncertain delivery with that ID.
+  retractableMessage(messageId, connector) {
+    const rows = this.db.prepare(`SELECT action, payload_json, result_json FROM outbox
+      WHERE remote_message_id = ? AND connector = ? AND status = 'SENT'
+      AND action IN ('message.send','message.reply')`).all(messageId, connector);
+    const id = value => typeof value === 'string' && value.length > 0;
+    let target = null;
+    for (const row of rows) {
+      const payload = JSON.parse(row.payload_json), result = JSON.parse(row.result_json);
+      if (!payload || !result || result.message_id !== messageId
+        || (result.chat_id != null && !id(result.chat_id))
+        || (result.thread_id != null && !id(result.thread_id))) return null;
+      // conv_key is response attribution, NOT the destination (A may ask us
+      // to send to B). Read actual transport targets / delivery receipts instead.
+      let requestedChat;
+      if (row.action === 'message.send') {
+        if (id(payload.chat_id) === id(payload.user_id)) return null;
+        requestedChat = payload.chat_id ?? null;
+      } else {
+        if (!id(payload.message_id)) return null;
+        requestedChat = this.eventByMessageId(payload.message_id, connector)?.chat_id ?? null;
+      }
+      if (requestedChat && result.chat_id && requestedChat !== result.chat_id) return null;
+      const chatId = result.chat_id ?? requestedChat;
+      if (!id(chatId)) return null;
+      // message.send explicitly creates a main-chat message. A reply's absent
+      // thread_id is UNKNOWN: reply_in_thread=false can still inherit a Slack
+      // target's thread, and Lark may return only a message id. Never infer a
+      // reply's thread from the attribution conv_key or mistake root_id for it.
+      const next = { connector, chat_id: chatId, thread_id: result.thread_id ?? null,
+        thread_known: row.action === 'message.send' || id(result.thread_id) };
+      // A reused remote id with incompatible receipts cannot choose a target.
+      if (target && (target.chat_id !== next.chat_id || target.thread_id !== next.thread_id
+        || target.thread_known !== next.thread_known)) return null;
+      target = next;
+    }
+    return target;
   }
 
   // Scope of a message this bot delivered on a connector (for replies/reactions to it).

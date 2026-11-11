@@ -22,7 +22,7 @@ import { formatInboundLine } from '../src/runtime-input.mjs';
 import { Store } from '../src/store.mjs';
 import { LarkClient } from '../src/lark.mjs';
 import { chatEvent, mailEvent, subjectEvent } from './event-fixture.mjs';
-import { fakeConnectors, larkConnectors } from './action-fixture.mjs';
+import { fakeConnectors, larkConnectors, FIXTURE_SELF } from './action-fixture.mjs';
 
 const TOKEN = 'runtime-token';
 const OWNER = { id: 'ou_owner12345678', target: { user_id: 'ou_owner12345678' } };
@@ -48,7 +48,8 @@ function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, 
   });
   t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   const call = (tool, input, authority = TOKEN) => service.call(tool, input, { authority });
-  const inbound = (fields) => store.ingest(chatEvent({ chatType: 'group', ...fields })).inbound;
+  // These delivery-mechanics cases use explicitly addressed group requests.
+  const inbound = (fields) => store.ingest(chatEvent({ chatType: 'group', mentions: [{ id: FIXTURE_SELF }], ...fields })).inbound;
   return { directory, workspace, store, connectors, service, call, inbound, logs };
 }
 
@@ -944,7 +945,7 @@ describe('owner notices and owner-only actions', () => {
     const mail = mailEvent({ uid: 7 });
     store.ingest(mail);
     store.ingest(chatEvent({ messageId: 'om_alice12345678', eventId: 'evt-alice', chatId: 'oc_group12345678',
-      chatType: 'group', senderId: 'ou_alice12345678' }));
+      chatType: 'group', senderId: 'ou_alice12345678', mentions: [{ id: FIXTURE_SELF }] }));
     // The mail line carries its reply target.
     assert.match(formatInboundLine(mail), /^\[source=email kind=email\.received msg=mail:1:7 event=imap:1:7 subject=thread:gmail:100 /);
 
@@ -1442,8 +1443,8 @@ describe('stay_silent decisions', () => {
     await assert.rejects(call('retract_message', { message_id: 'om_other12345678', decision_id: 'message:om_undo123456789' }),
       (error) => error.code === 'stale_decision');
     assert.equal(connectors.calls.length, before);
-    // Without decision_id it behaves as before and records nothing.
-    await call('retract_message', { message_id: 'om_other12345678' });
+    // Missing evidence is not an unfenced group-delivery escape hatch.
+    await assert.rejects(call('retract_message', { message_id: 'om_other12345678' }), error => error.code === 'unknown_target');
     assert.equal(decisions(store).length, 2);
   });
 
@@ -1485,15 +1486,15 @@ describe('stay_silent switched off (the default)', () => {
     assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM activities WHERE kind IN ('delivery.silent', 'delivery.blocked')").get().n, 0);
   });
 
-  it('keeps retract_message exactly as it was: no decision_id in its schema or input', async (t) => {
+  it('offers optional retraction decisions even with explicit silence disabled', async (t) => {
     const { service, call } = setup(t);
     const retract = service.tools().find((tool) => tool.name === 'retract_message');
     const defined = TOOLS.find((tool) => tool.name === 'retract_message');
     assert.deepEqual(retract, publicTool(defined));
-    assert.deepEqual(Object.keys(retract.inputSchema.properties), ['source', 'message_id']);
+    assert.deepEqual(Object.keys(retract.inputSchema.properties), ['source', 'message_id', 'decision_id', 'decision_instance']);
     assert.equal(retract.inputSchema.additionalProperties, false);
     await assert.rejects(call('retract_message', { message_id: 'om_delivered123456', decision_id: 'message:om_x' }),
-      (error) => error.code === 'invalid_input');
+      (error) => error.code === 'unknown_decision');
   });
 });
 

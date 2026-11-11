@@ -81,6 +81,13 @@ export class ChatRoster {
     return this.cache.get(chatId)?.byId.get(openId) ?? null;
   }
 
+  // Cache-only proof for a configured bot vocative; never fetch during send.
+  addresseeNameEvidence(chatId, name, selfId) {
+    const entry = this._fresh(chatId);
+    return { fresh: Boolean(entry), selfPresent: Boolean(entry?.byId.has(selfId)),
+      ids: (entry?.byKey.get(nameKey(name)) ?? []).map(member => member.id) };
+  }
+
   // Bounded best-effort refresh for the ingest path. Resolves within
   // warmTimeoutMs even if lark-cli is slow; never rejects; a failed fetch keeps
   // any stale cache so formatting degrades to stubs instead of breaking a turn.

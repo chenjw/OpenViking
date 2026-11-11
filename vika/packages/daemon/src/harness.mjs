@@ -41,6 +41,7 @@ export class Harness {
     afterEvent = null,
     isOwner = () => false,
     mentionTarget = () => null,
+    prepareAddressing = null,
     isStopping = () => false,
   }) {
     this.config = config;
@@ -59,6 +60,7 @@ export class Harness {
     this.afterEvent = afterEvent;
     this.isOwner = isOwner;
     this.mentionTarget = mentionTarget;
+    this.prepareAddressing = prepareAddressing;
     this.isStopping = isStopping;
     this.ingressBarrier = Promise.resolve();
     this.pendingIngress = 0;
@@ -198,7 +200,9 @@ export class Harness {
       // Bounded like the warm-up above, and never rejects.
       const recall = this.recall && wantsRecall(event, mention) ? await this.recall.forEvent(event, { owner }) : '';
       await this.runtime.prepareInputContext?.();
+      const addressing = this.prepareAddressing?.(event, result.inbound.seq);
       const line = formatInboundLine(event, null, {
+        addressing,
         ...(idleHint ?? {}),
         owner,
         mention,
@@ -234,6 +238,7 @@ export class Harness {
       await this.runtime.prepareInputContext?.();
       this.groupBurst.route(eventDeliveryItem(row, seq, {
         text: formatInboundLine(row, null, {
+          addressing: this.prepareAddressing?.(row, row.seq),
           owner: this.isOwner(row),
           mention: this.mentionTarget(row),
           replyTo: row.messageType === 'card_action' ? { kind: 'me' } : resolveReplyTarget(this.store, row),

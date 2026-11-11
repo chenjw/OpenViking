@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import { createHash, randomUUID } from 'node:crypto';
-import { conversationKeyFor, eventIdentity } from '../event.mjs';
+import { conversationKeyFor, eventIdentity, normalizeEvent } from '../event.mjs';
+import { classifyAddressee, frozenAddressee, permitsSelf } from '../addressing.mjs';
 import { registerCard } from '../card-messages.mjs';
 import {
   cancelApproval, claimApproval, createApproval, editApproval, finishApproval, getApproval, supersedeApprovals,
@@ -279,12 +280,59 @@ export class ActionService {
     this.loopBroken = false;
   }
 
+  classifyAddressing(event, { names = false } = {}) {
+    const self = this.connectors.selfIdentity?.(event.connectorInstance) ?? null;
+    return classifyAddressee(event, { self,
+      aliases: names ? [this.config.agentName, this.roster?.nameForId?.(event.chatId, self?.id)].filter(Boolean) : [],
+      nameEvidence: name => this.roster?.addresseeNameEvidence?.(event.chatId, name, self?.id),
+      replyAuthor: this.store.scopedReplyAuthor?.(event, self?.id),
+    });
+  }
+
+  prepareAddressing(event, seq) {
+    if (event.kind !== 'message.created' || ['p2p', 'doc_comment'].includes(event.chatType)) return null;
+    const row = this.store.acceptedEvents(event.eventId, event.connectorInstance).find(value => Number(value.seq) === Number(seq));
+    const raw = row ? JSON.parse(row.event_json) : null;
+    const current = raw ? normalizeEvent(raw) : event;
+    const selfId = this.connectors.selfIdentity?.(current.connectorInstance)?.id ?? null;
+    if (raw?._core_addressee) {
+      return frozenAddressee(raw._core_addressee, current, selfId)
+        ?? { ...this.classifyAddressing(current), kind: 'unknown', evidence: 'frozen_identity_or_scope_mismatch', direct_ids: [] };
+    }
+    const result = this.classifyAddressing(current, { names: true });
+    if (current.chatType !== 'p2p') this.store.freezeAddressee?.(seq, result);
+    return result;
+  }
+
+  assertGroupAddressee(fence, caller) {
+    if (!fence.chat_id || ['p2p', 'doc_comment'].includes(fence.chat_type) || fence.kind !== 'message.created') return;
+    const raw = JSON.parse(fence.event_json);
+    const event = normalizeEvent(raw);
+    const selfId = this.connectors.selfIdentity?.(fence.connector_instance)?.id ?? null;
+    const addressing = raw._core_addressee
+      ? frozenAddressee(raw._core_addressee, event, selfId)
+        ?? { ...this.classifyAddressing(event), kind: 'unknown', evidence: 'frozen_identity_or_scope_mismatch', direct_ids: [] }
+      : this.classifyAddressing(event);
+    caller.trace.addressee = addressing.kind;
+    caller.trace.addresseeEvidence = addressing.evidence;
+    if (permitsSelf(addressing, selfId)) return;
+    // A denied interjection is settled as silence, not an invitation for the
+    // undecided-input nudge to ask the model again. Never rewrite a past send.
+    if (this.store.decisionFor(fence.connector_instance, fence.event_id)?.outcome !== 'delivered') {
+      this.store.recordDecision({ row: fence, outcome: 'silent' });
+    }
+    throw blocked('not_addressed', `Group delivery blocked: recipient=${addressing.kind} (${addressing.evidence}). Recorded as silent; no message was sent. Do not retry with another decision or destination. ${NO_ACTION}`);
+  }
+
   // Daemon-authored reply (slash command result, failure notice) on an event's
   // own reply route. Never carries model output; keyed once per event+purpose.
   async replyToEvent(event, text, purpose) {
     if (!event?.replyRoute) return { ok: false, stage: 'no-target' };
     const trace = { purpose, connector: event.connectorInstance, action: event.replyRoute.action, inboundSeq: event.seq };
     try {
+      const accepted = this.store.acceptedEvents(event.eventId, event.connectorInstance);
+      if (event.chatType === 'group' && event.kind === 'message.created' && accepted.length !== 1) return { ok: false, stage: 'not-addressed' };
+      if (accepted.length === 1) this.assertGroupAddressee(accepted[0], { trace });
       const result = await this.deliver({
         caller: { trace },
         connector: event.connectorInstance,
@@ -671,6 +719,7 @@ export class ActionService {
       this.assertAuthority(caller.authority);
       if (fence) {
         if (!allowStaleDecision && !this.isTimerReminder(fence)) this.assertFresh(fence, caller);
+        if (['message.send', 'message.reply', 'message.react', 'message.retract'].includes(action)) this.assertGroupAddressee(fence, caller);
         this.assertNoBotLoop(fence, action, scope, caller);
       }
     }
@@ -763,6 +812,7 @@ export class ActionService {
       throw blocked('unsupported', `chat_id=${input.chat_id} takes no new message: answer one of its messages with reply_message. ${NO_ACTION}`);
     }
     const fence = this.fence(input, caller, { allowStaleDecision });
+    this.assertGroupAddressee(fence, caller);
     this.authorize(fence);
     this.authorizeTimerDelivery(fence, { connector, action: 'message.send', chatId: input.chat_id });
     // A plain send lands in the chat's main conversation.
@@ -831,6 +881,7 @@ export class ActionService {
       throw blocked('unsupported', `${connector} does not support thread replies. ${NO_ACTION}`);
     }
     const fence = this.fence(input, caller, { allowStaleDecision });
+    this.assertGroupAddressee(fence, caller);
     // The reply lands where its target is. A target outside any chat (a mail)
     // has no chat: it never borrows the decision's.
     const chatId = target ? target.chat_id : fence.chat_id;
@@ -1087,16 +1138,22 @@ export class ActionService {
 
   async retractMessage(input, caller) {
     const connector = this.route(caller, 'message.retract', 'actions', input.source, { messageId: input.message_id });
-    // decision_id is offered only with explicit silence on: the retraction is
-    // then fenced and recorded like any other final delivery.
     const fence = input.decision_id === undefined ? null : this.fence(input, caller);
-    const target = this.store.deliveredMessage(input.message_id, connector);
+    const target = this.store.retractableMessage(input.message_id, connector);
+    if (!target) throw blocked('unknown_target', `Retraction requires a locally verified message sent by this bot. ${NO_ACTION}`);
+    const privateTarget = target.chat_id && this.store.chatContext(connector, target.chat_id)?.chat_type === 'p2p';
+    if (!privateTarget && (!fence || fence.kind !== 'message.created' || fence.chat_type !== 'group'
+      || fence.connector_instance !== connector || fence.chat_id !== target.chat_id
+      || !target.thread_known || (fence.thread_id ?? null) !== target.thread_id)) {
+      throw blocked('not_addressed', `Group retraction requires an accepted decision from the verified target chat/thread. ${NO_ACTION}`);
+    }
+    if (fence) this.assertGroupAddressee(fence, caller);
     const result = await this.deliver({
       caller, connector, action: 'message.retract',
       input: { message_id: input.message_id },
       key: this.key(null, 'retract', connector, input.message_id),
       summary: '[message retracted]',
-      scope: { chatId: target?.chat_id ?? null, convKey: target?.conv_key ?? null },
+      scope: { chatId: target.chat_id, threadId: target.thread_id, convKey: fence?.conv_key ?? null },
       fence,
       inboundSeq: fence?.seq ?? null,
     });
@@ -1386,6 +1443,7 @@ export class ActionService {
   async createTimer(input, caller) {
     if (!this.timers) throw blocked('unknown_tool', 'timer tools are not available');
     const fence = this.fence(input, caller);
+    this.assertGroupAddressee(fence, caller);
     const existing = this.timers.needsRefresh ? null
       : this.timers.findByDecision(fence.connector_instance, fence.event_id);
     if (existing) {
