@@ -910,7 +910,11 @@ export class CodexAgent {
         'app-server', '--listen', 'stdio://',
         '-c', `developer_instructions=${tomlString(this.developerInstructionsText)}`,
         ...this.appServerConfigArgs,
-        ...(this.config.openVikingDisabled ? ['-c', 'mcp_servers.openviking.enabled=false'] : []),
+        // A bare enabled=false creates a transport-less table when the user
+        // has no OV server. Codex 0.167 rejects it even though it is disabled.
+        // Replace only this child-session entry with a valid disabled stanza;
+        // no global MCP/config file is changed and this command never runs.
+        ...(this.config.openVikingDisabled ? ['-c', `mcp_servers.openviking={enabled=false,command=${tomlString(process.execPath)},args=["-e","process.exit(1)"]}`] : []),
       ];
       // The daemon's agent tools ride along as an MCP stdio adapter to the Core.
       const tools = agentToolServer(this.config, this.authorityToken);

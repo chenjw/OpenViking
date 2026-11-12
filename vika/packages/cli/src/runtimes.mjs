@@ -9,6 +9,7 @@ import { managedPiBin } from '../../daemon/src/pi-runtime.mjs';
 import { assertSupportedOpencodeVersion } from '../../daemon/src/opencode-runtime.mjs';
 import { t } from './i18n.mjs';
 import { probeAcp, probeAppServer } from './runtime-probe.mjs';
+import { probeCodexProvider } from './codex-provider-probe.mjs';
 
 // Setup only checks the agent runtimes; installing and logging in to them is
 // the user's business. Pi ships with Vika and reuses the user's ~/.pi/agent.
@@ -43,15 +44,23 @@ export async function detectRuntimes({
   piBin = managedPiBin(),
   probe = probeAppServer,
   acpProbe = probeAcp,
+  codexProviderProbe = probeCodexProvider,
 } = {}) {
   const runtimes = [];
 
   const codex = which('codex', env);
   const codexLogin = codex ? await run(execFileImpl, codex, ['login', 'status'], env) : null;
+  // External providers can work without a ChatGPT login. Do not claim a
+  // login: offer them only after the existing configuration answers a real,
+  // bounded, read-only model probe. No auth/configuration is imported or changed.
+  const codexProvider = codex && !codexLogin?.ok
+    ? await codexProviderProbe(codex, { env, execFileImpl }) : null;
   runtimes.push({
     id: 'codex', label: 'Codex', model: 'codex:', bin: codex, binEnv: 'CODEX_BIN',
-    available: Boolean(codexLogin?.ok),
-    note: !codex ? t('未安装', 'not installed') : codexLogin.ok ? t('已登录', 'logged in') : t('未登录：先运行 codex login', 'not logged in: run codex login first'),
+    available: Boolean(codexLogin?.ok || codexProvider?.available),
+    note: !codex ? t('未安装', 'not installed') : codexLogin.ok ? t('已登录', 'logged in')
+      : codexProvider?.available ? t('现有 provider 实际调用已验证（无需 ChatGPT 登录）', 'Existing provider verified by a model call (no ChatGPT login needed)')
+        : t('登录状态与现有 provider 调用均未通过；请检查 Codex 配置', 'Neither login status nor the configured provider probe passed; check Codex configuration'),
   });
 
   const claude = which('claude', env);

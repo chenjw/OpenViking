@@ -247,6 +247,19 @@ describe('formatting helpers', () => {
     );
   });
 
+  it('disables OV with a complete child-only transport even without a user OV declaration', async () => {
+    const children = [], spawns = [];
+    const { agent } = newAgent(makeStore(), {
+      spawn: (_bin, args) => { spawns.push(args); const child = new FakeChild(); children.push(child); return child; },
+    }, { ...baseConfig, openVikingDisabled: true });
+    await handshake(agent, children);
+    const setting = spawns[0].find((arg) => arg.startsWith('mcp_servers.openviking='));
+    assert.equal(setting, `mcp_servers.openviking={enabled=false,command=${JSON.stringify(process.execPath)},args=["-e","process.exit(1)"]}`);
+    assert.ok(!spawns[0].includes('mcp_servers.openviking.enabled=false'));
+    assert.ok(!spawns[0].some(arg => arg.startsWith('mcp_servers=')), 'unrelated user MCPs remain untouched');
+    await agent.stop();
+  });
+
   it('injects the agent tool MCP adapter into the app-server spawn', async () => {
     const store = makeStore();
     const spawnArgs = [];
