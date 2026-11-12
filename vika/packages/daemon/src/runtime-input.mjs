@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import { lookupMemberName, sanitizeMemberName } from './roster.mjs';
-import { ADDRESSEE_KINDS } from './addressing.mjs';
+import { ADDRESSEE_KINDS, VETO_REASONS, vetoReason } from './addressing.mjs';
 
 // Runtime-neutral authenticated envelope shared by every adapter. Untrusted
 // content stays on one physical line so it cannot forge metadata.
@@ -179,8 +179,11 @@ export function formatInboundLine(message, resolveName = null, authenticated = {
     : '';
   const bots = authenticated?.botsSinceHuman;
   const botsTag = Number.isSafeInteger(bots) && bots > 0 ? ` bots_since_human=${bots}` : '';
-  const recipientTag = ADDRESSEE_KINDS.includes(authenticated?.addressing?.kind)
-    ? ` addressee=${authenticated.addressing.kind}` : '';
+  const addressing = authenticated?.addressing;
+  const veto = addressing && Object.hasOwn(addressing, 'veto') ? addressing.veto : vetoReason(addressing);
+  const recipientTag = (ADDRESSEE_KINDS.includes(authenticated?.addressing?.kind)
+    ? ` addressee=${authenticated.addressing.kind}` : '')
+    + (VETO_REASONS.includes(veto) ? ` veto=${veto}` : '');
   const mentionTag = MENTION_TARGETS.has(authenticated?.mention) ? ` mention=${authenticated.mention}` : '';
   const line = `[chat=${chatTag(metadataTag(message.chatId), message.threadId)}${message.external ? ' external=true' : ''} source=${message.source || 'lark'}`
     + (message.connectorInstance && message.connectorInstance !== message.source ? ` instance=${metadataTag(message.connectorInstance)}` : '')

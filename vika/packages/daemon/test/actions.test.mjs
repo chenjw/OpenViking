@@ -1691,3 +1691,20 @@ describe('explicit delayed delivery freshness override', () => {
     assert.equal(connectors.calls.length,0);
   });
 });
+
+describe('group reply veto', () => {
+  // The model decides group replies; the Core only refuses id-proven others.
+  it('refuses a reply the model attempts on an @others-only message and allows unproven vocatives', async (t) => {
+    const { call, inbound, connectors, logs } = setup(t);
+    const other = inbound({ messageId: 'om_veto_other1234', eventId: 'evt-veto-other', chatId: 'oc_veto12345678', mentions: [{ id: 'ou_someone12345678' }] });
+    await assert.rejects(call('send_message', { chat_id: other.chatId, markdown: 'x', decision_id: other.eventId }),
+      (error) => error.code === 'not_addressed' && /veto:mention_others/.test(error.message));
+    await assert.rejects(call('reply_message', { message_id: other.messageId, markdown: 'x', decision_id: other.eventId }),
+      (error) => error.code === 'not_addressed');
+    assert.equal(connectors.calls.length, 0);
+    assert.ok(logs.some((line) => line.message === 'agent_tool' && line.addresseeVeto === 'mention_others'));
+    const vocative = inbound({ messageId: 'om_veto_name12345', eventId: 'evt-veto-name', chatId: 'oc_veto12345678', mentions: [], content: '小助理说下你为什么没理他' });
+    await call('send_message', { chat_id: vocative.chatId, markdown: '因为…', decision_id: vocative.eventId });
+    assert.equal(connectors.calls.length, 1);
+  });
+});

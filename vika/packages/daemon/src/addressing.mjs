@@ -4,11 +4,17 @@
 // Recipient identification, not a model-supplied permission. IDs come only from
 // accepted Connector metadata / scoped local message authors. Names require a
 // fresh roster and an unambiguous configured bot alias. No network or LLM call.
+// The classification is evidence for the model; the Core only vetoes a group
+// reply when IDs prove the message called someone else (see vetoReason).
 export const ADDRESSEE_KINDS = Object.freeze([
   'direct_self', 'direct_others', 'explicit_self_and_named_others',
   'broadcast', 'no_target', 'unknown',
 ]);
 const SELF_KINDS = new Set(['direct_self', 'explicit_self_and_named_others']);
+// Hard vetoes, keyed by the classifier evidence that proves them. A name the
+// roster attributes to someone else (roster_named_other) is evidence, not a veto.
+export const VETO_REASONS = Object.freeze(['mention_others', 'reply_to_others']);
+const VETO_BY_EVIDENCE = new Map([['mention_ids', 'mention_others'], ['scoped_reply_author', 'reply_to_others']]);
 const key = value => String(value ?? '').trim().toLocaleLowerCase().replace(/[\s_]+/g, ' ');
 const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const GENERIC_NAMES = new Set(['bot', 'the bot', 'agent', 'the agent', 'assistant', '机器人', '助手', '大家', '各位', '所有人', '你', '你们', '我', '我们', '他', '她', '它']);
@@ -32,6 +38,12 @@ export function classifyAddressee(event, { self = null, aliases = [], nameEviden
   let withoutMentions = text;
   for (const m of mentions) if (typeof m?.key === 'string' && m.key) withoutMentions = withoutMentions.split(m.key).join(' ');
   withoutMentions = withoutMentions.replace(/^[\s，,:：]+/, '');
+  // @-ids that all name others decide the recipient before any text grammar:
+  // "@Alice 大家怎么看" calls Alice, not the room (and so not this bot).
+  const resolved = mentions.length > 0 && mentions.every(m => typeof m?.id === 'string' && m.id);
+  if (!broadcast && selfId && resolved && !mentions.some(m => m.id === selfId)) {
+    return answer('direct_others', 'mention_ids', mentions.map(m => m.id));
+  }
   if (broadcast || broadcastQuestion(withoutMentions) || broadcastQuestion(event.data?.addressing_text ?? '')) return answer('broadcast', broadcast ? 'broadcast_mention' : 'broad_question');
   if (!selfId) return answer('unknown', 'self_identity_unavailable', mentions.map(m => m?.id).filter(id => typeof id === 'string' && id && id !== 'all'));
   if (mentions.length) {
@@ -78,9 +90,22 @@ export function classifyAddressee(event, { self = null, aliases = [], nameEviden
     parent === event.threadRootId && parent ? 'thread_membership_only' : 'no_direct_recipient');
 }
 
+// Fast pass: the Core itself proved the message calls this bot (an @mention
+// id, a quote of its own message, a verified vocative). Daemon-authored group
+// notices need it; model replies only need the absence of a veto.
 export function permitsSelf(addressing, selfId) {
   return Boolean(addressing && SELF_KINDS.has(addressing.kind) && selfId
     && addressing.self_id === selfId && addressing.direct_ids?.includes(selfId));
+}
+
+// A group reply the model cannot override: the message @-mentions only others
+// (mention_others) or quote-replies to someone else's message without @-ing
+// this bot (reply_to_others). Everything else (no_target, unknown, broadcast,
+// names, follow-ups) is the model's call. Works on old frozen rows unchanged.
+export function vetoReason(addressing, selfId = addressing?.self_id) {
+  if (!addressing || addressing.kind !== 'direct_others' || !Array.isArray(addressing.direct_ids)
+    || !addressing.direct_ids.length || (selfId && addressing.direct_ids.includes(selfId))) return null;
+  return VETO_BY_EVIDENCE.get(addressing.evidence) ?? null;
 }
 
 export function frozenAddressee(value, event, selfId) {

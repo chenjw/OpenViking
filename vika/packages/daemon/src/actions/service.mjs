@@ -3,7 +3,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { conversationKeyFor, eventIdentity, normalizeEvent } from '../event.mjs';
-import { classifyAddressee, frozenAddressee, permitsSelf } from '../addressing.mjs';
+import { classifyAddressee, frozenAddressee, permitsSelf, vetoReason } from '../addressing.mjs';
 import { registerCard } from '../card-messages.mjs';
 import {
   cancelApproval, claimApproval, createApproval, editApproval, finishApproval, getApproval, supersedeApprovals,
@@ -238,7 +238,8 @@ export class ActionService {
           eventKey: `tool:${randomUUID()}`, kind: 'delivery.blocked', status: 'BLOCKED',
           conversationKey: caller.convKey ?? null, inboundSeq: trace.decisionSeq ?? null, summary: safeError(error),
           metadata: { tool: name, code: trace.code, connector: trace.connector, via, runtime: trace.runtime,
-            decisionSeq: trace.decisionSeq, newerSeq: trace.newerSeq },
+            decisionSeq: trace.decisionSeq, newerSeq: trace.newerSeq,
+            ...(trace.addresseeVeto ? { veto: trace.addresseeVeto } : {}) },
         });
       }
       throw error;
@@ -289,39 +290,58 @@ export class ActionService {
     });
   }
 
+  // The frozen classification of an accepted group event, plus its veto. A
+  // frozen row that no longer matches this identity/scope never turns into a
+  // permission: it keeps whichever veto either the stored row (against its own
+  // self id) or a fresh id-only classification proves.
+  resolveAddressing(raw, event, selfId) {
+    const stored = raw?._core_addressee;
+    if (!stored) return null;
+    const frozen = frozenAddressee(stored, event, selfId);
+    if (frozen) return { ...frozen, veto: vetoReason(frozen, selfId) };
+    const fresh = this.classifyAddressing(event);
+    const veto = (stored && typeof stored === 'object' ? vetoReason(stored) : null) ?? vetoReason(fresh, selfId);
+    return { ...fresh, kind: 'unknown', evidence: 'frozen_identity_or_scope_mismatch', direct_ids: [], veto };
+  }
+
   prepareAddressing(event, seq) {
     if (event.kind !== 'message.created' || ['p2p', 'doc_comment'].includes(event.chatType)) return null;
     const row = this.store.acceptedEvents(event.eventId, event.connectorInstance).find(value => Number(value.seq) === Number(seq));
     const raw = row ? JSON.parse(row.event_json) : null;
     const current = raw ? normalizeEvent(raw) : event;
     const selfId = this.connectors.selfIdentity?.(current.connectorInstance)?.id ?? null;
-    if (raw?._core_addressee) {
-      return frozenAddressee(raw._core_addressee, current, selfId)
-        ?? { ...this.classifyAddressing(current), kind: 'unknown', evidence: 'frozen_identity_or_scope_mismatch', direct_ids: [] };
-    }
+    if (raw?._core_addressee) return this.resolveAddressing(raw, current, selfId);
     const result = this.classifyAddressing(current, { names: true });
     if (current.chatType !== 'p2p') this.store.freezeAddressee?.(seq, result);
-    return result;
+    return { ...result, veto: vetoReason(result, selfId) };
   }
 
-  assertGroupAddressee(fence, caller) {
+  // Group replies are the model's call except for a hard veto (the message
+  // @-mentions or quote-replies to only someone else). Daemon-authored notices
+  // have no model decision behind them, so they also need the fast pass.
+  assertGroupAddressee(fence, caller, { daemon = false } = {}) {
     if (!fence.chat_id || ['p2p', 'doc_comment'].includes(fence.chat_type) || fence.kind !== 'message.created') return;
     const raw = JSON.parse(fence.event_json);
     const event = normalizeEvent(raw);
     const selfId = this.connectors.selfIdentity?.(fence.connector_instance)?.id ?? null;
-    const addressing = raw._core_addressee
-      ? frozenAddressee(raw._core_addressee, event, selfId)
-        ?? { ...this.classifyAddressing(event), kind: 'unknown', evidence: 'frozen_identity_or_scope_mismatch', direct_ids: [] }
-      : this.classifyAddressing(event);
+    let addressing = this.resolveAddressing(raw, event, selfId);
+    if (!addressing) {
+      addressing = this.classifyAddressing(event);
+      addressing = { ...addressing, veto: vetoReason(addressing, selfId) };
+    }
     caller.trace.addressee = addressing.kind;
     caller.trace.addresseeEvidence = addressing.evidence;
-    if (permitsSelf(addressing, selfId)) return;
-    // A denied interjection is settled as silence, not an invitation for the
+    if (addressing.veto) caller.trace.addresseeVeto = addressing.veto;
+    if (!addressing.veto) {
+      if (!daemon || permitsSelf(addressing, selfId)) return;
+      throw blocked('not_addressed', `Daemon notice withheld: recipient=${addressing.kind} (${addressing.evidence}) is not a direct call. ${NO_ACTION}`);
+    }
+    // A vetoed interjection is settled as silence, not an invitation for the
     // undecided-input nudge to ask the model again. Never rewrite a past send.
     if (this.store.decisionFor(fence.connector_instance, fence.event_id)?.outcome !== 'delivered') {
       this.store.recordDecision({ row: fence, outcome: 'silent' });
     }
-    throw blocked('not_addressed', `Group delivery blocked: recipient=${addressing.kind} (${addressing.evidence}). Recorded as silent; no message was sent. Do not retry with another decision or destination. ${NO_ACTION}`);
+    throw blocked('not_addressed', `Group delivery blocked: veto:${addressing.veto} (recipient=${addressing.kind}, ${addressing.evidence}): the message calls someone else, not you. Recorded as silent; no message was sent. Do not retry with another decision or destination. ${NO_ACTION}`);
   }
 
   // Daemon-authored reply (slash command result, failure notice) on an event's
@@ -332,7 +352,7 @@ export class ActionService {
     try {
       const accepted = this.store.acceptedEvents(event.eventId, event.connectorInstance);
       if (event.chatType === 'group' && event.kind === 'message.created' && accepted.length !== 1) return { ok: false, stage: 'not-addressed' };
-      if (accepted.length === 1) this.assertGroupAddressee(accepted[0], { trace });
+      if (accepted.length === 1) this.assertGroupAddressee(accepted[0], { trace }, { daemon: true });
       const result = await this.deliver({
         caller: { trace },
         connector: event.connectorInstance,

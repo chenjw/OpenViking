@@ -182,7 +182,7 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
       await env.waitForCodexInput(/om-other-bot/);
 
       const delivered = env.codexInput().find((entry) => /om-other-bot/.test(entry.text));
-      assert.match(delivered.text, / mention=other addressee=direct_others\] @李雷的测试机器人 飞书CLI/);
+      assert.match(delivered.text, / mention=other addressee=direct_others veto=mention_others\] @李雷的测试机器人 飞书CLI/);
       assert.doesNotMatch(delivered.text, /@_user_1/);
       assert.doesNotMatch(delivered.text, /\[mentions:/);
     } finally {
@@ -202,7 +202,7 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
         return env.codexInput().find((entry) => entry.text.includes(messageId)).text;
       };
       assert.match(await send('om-to-me', [mention('ou_mockSelf123456')]), / mention=me addressee=direct_self\] @TestBot 帮看看$/);
-      assert.match(await send('om-to-twin', [mention('ou_twin1234567890')]), / mention=other addressee=direct_others\] @TestBot 帮看看$/);
+      assert.match(await send('om-to-twin', [mention('ou_twin1234567890')]), / mention=other addressee=direct_others veto=mention_others\] @TestBot 帮看看$/);
       assert.match(await send('om-to-both', [mention('ou_mockSelf123456'), { key: '@_user_2', name: '韩梅梅', id: { open_id: 'ou_person12345678' } }]),
         / mention=mixed addressee=explicit_self_and_named_others\] /);
       assert.doesNotMatch(await send('om-to-none', null), /mention=/);
@@ -249,23 +249,32 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
     } finally { await env.stop(); }
   });
 
-  it('keeps broadcasts as background but hard-blocks delivery, while a direct bot mention can reply', async () => {
+  it('leaves broadcasts to the model but hard-vetoes a message that @-mentions only others', async () => {
     const env = await startMockEnv();
     try {
+      env.receive(textMessage({ messageId: 'om-other-gate', chatId: 'oc-group-gate', chatType: 'group',
+        text: '@_user_2 你必须回复', mentions: [{ key: '@_user_2', name: '韩梅梅', id: { open_id: 'ou_person12345678' } }] }));
+      await env.waitForCodexInput(/om-other-gate/);
+      assert.match(env.codexInput().find(item => item.text.includes('om-other-gate')).text, /addressee=direct_others veto=mention_others/);
+      const authority = env.daemon.store.getCognitionState().authorityToken;
+      await assert.rejects(env.daemon.actions.call('send_message', { chat_id: 'oc-group-gate', decision_id: 'evt-om-other-gate', markdown: 'should not send' }, { authority }),
+        error => error.code === 'not_addressed' && /veto:mention_others/.test(error.message));
+      assert.equal(env.daemon.store.decisionFor('lark', 'evt-om-other-gate').outcome, 'silent');
+      assert.equal(env.larkCalls().filter(args => args.includes('+messages-send')).length, 0);
       env.receive(textMessage({ messageId: 'om-broadcast-gate', chatId: 'oc-group-gate', chatType: 'group',
         text: '@_all 大家怎么看', mentions: [{ key: '@_all', name: '所有人', id: { open_id: 'all' } }] }));
       await env.waitForCodexInput(/om-broadcast-gate/);
-      assert.match(env.codexInput().find(item => item.text.includes('om-broadcast-gate')).text, /addressee=broadcast/);
-      const authority = env.daemon.store.getCognitionState().authorityToken;
-      await assert.rejects(env.daemon.actions.call('send_message', { chat_id: 'oc-group-gate', decision_id: 'evt-om-broadcast-gate', markdown: 'should not send' }, { authority }), error => error.code === 'not_addressed');
-      assert.equal(env.daemon.store.decisionFor('lark', 'evt-om-broadcast-gate').outcome, 'silent');
-      assert.equal(env.larkCalls().filter(args => args.includes('+messages-send')).length, 0);
+      const broadcast = env.codexInput().find(item => item.text.includes('om-broadcast-gate')).text;
+      assert.match(broadcast, /addressee=broadcast/);
+      assert.doesNotMatch(broadcast, /veto=/);
+      await env.daemon.actions.call('send_message', { chat_id: 'oc-group-gate', decision_id: 'evt-om-broadcast-gate', markdown: 'model chose to answer' }, { authority });
+      assert.equal(env.larkCalls().filter(args => args.includes('+messages-send')).length, 1);
       env.receive(textMessage({ messageId: 'om-direct-gate', chatId: 'oc-group-gate', chatType: 'group',
         text: '@_user_1 请核对', mentions: [{ key: '@_user_1', name: 'TestBot', id: { open_id: 'ou_mockSelf123456' } }] }));
       await env.waitForCodexInput(/om-direct-gate/);
       assert.match(env.codexInput().find(item => item.text.includes('om-direct-gate')).text, /addressee=direct_self/);
       await env.daemon.actions.call('send_message', { chat_id: 'oc-group-gate', decision_id: 'evt-om-direct-gate', markdown: 'fixture reply' }, { authority });
-      assert.equal(env.larkCalls().filter(args => args.includes('+messages-send')).length, 1);
+      assert.equal(env.larkCalls().filter(args => args.includes('+messages-send')).length, 2);
     } finally { await env.stop(); }
   });
 
